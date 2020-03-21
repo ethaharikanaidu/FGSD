@@ -1,84 +1,73 @@
 '''This is the deep learning implementation in Keras for graph classification based on FGSD graph features.'''
 
-from keras import activations, initializers
-from keras import regularizers
-import keras.backend as K
-from keras.engine.topology import Layer
-from keras.layers import Input, Dense, Activation, Dropout
-from keras.models import Model,Sequential
-
-
-
 import numpy as np
 import scipy.io
-from sklearn.preprocessing import OneHotEncoder
+import networkx as nx
+from grakel import datasets
+from scipy import sparse
 from sklearn.utils import shuffle
-
+from scipy import linalg
+import time
+import csv
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score
 
 ########### LOAD DATA ###########
 
-mat = scipy.io.loadmat('MATLAB\data\G_mutag.mat')
-graphs_data=mat['G_mutag'][0]
-
-mat = scipy.io.loadmat('MATLAB\data\Y_mutag.mat')
-data_labels=np.concatenate(mat['Y'])
-
-data_labels_binary=[]
-for label in data_labels:
-    if label==1:
-        new_label=1
-    else:
-        new_label=0
-    data_labels_binary.append(new_label)
-
-data_labels_binary=np.array(data_labels_binary)
-
-
+def return_dataset(file_name):
+    dd = datasets.fetch_dataset(file_name, verbose=True)
+    graph_list = []
+    for gg in dd.data:
+        v = set([i[0] for i in gg[0]]).union(set([i[1] for i in gg[0]]))
+        g_ = nx.Graph()
+        g_.add_nodes_from(v)
+        g_.add_edges_from([(i[0], i[1]) for i in gg[0]])
+        graph_list.append(g_)
+    y = dd.target
+    return graph_list, np.array(y)
 
 ########### SET PARAMETERS ###########
 
-feature_matrix=[]
-nbins=200
-range_hist=(0,20)
-
-########### CONSTRUCT FEATURE MATRIX ###########
-
-
-for A in graphs_data:
-
-    A=A.astype(np.float32)
-    D=np.sum(A,axis=0)
-    L=np.diagflat(D)-A
-
-    ones_vector=np.ones(L.shape[0])
-    fL=np.linalg.pinv(L) #See MATLAB version for faster implementation.
-
-    S=np.outer(np.diag(fL),ones_vector)+np.outer(ones_vector,np.diag(fL))-2*fL
-
-    hist, bin_edges = np.histogram(S.flatten(),bins=nbins,range=range_hist)
-
-    feature_matrix.append(hist)
-
-feature_matrix=np.array(feature_matrix)
-feature_matrix,data_labels_binary=shuffle(feature_matrix, data_labels_binary)
+def FGSD(graphs,labels):
+    feature_matrix=[]
+    nbins=200
+    range_hist=(0,20)
+    for A in graphs:
+        L=nx.laplacian_matrix(A)
+        ones_vector=np.ones(L.shape[0])
+        fL=np.linalg.pinv(L.todense())
+        S=np.outer(np.diag(fL),ones_vector)+np.outer(ones_vector,np.diag(fL))-2*fL
+        hist, bin_edges = np.histogram(S.flatten(),bins=nbins,range=range_hist)
+        feature_matrix.append(hist)
+    feature_matrix=np.array(feature_matrix)
+    feature_matrix,data_labels_binary=shuffle(feature_matrix, labels)
+    return feature_matrix, data_labels_binary
 
 
 ########### TRAIN AND VALIDATE MODEL ###########
 
 
-model=Sequential()
-model.add(Dense(4500, activation='relu',input_shape=(feature_matrix.shape[1],)))
-model.add(Dropout(0.2))
-model.add(Dense(1024, activation='relu'))
-model.add(Dropout(0.2))
-model.add(Dense(64, activation='relu'))
-model.add(Dropout(0.2))
-model.add(Dense(1, activation='sigmoid'))
-
-
-model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-model.fit(feature_matrix, data_labels_binary, validation_split=0.1, epochs=20, batch_size=50)
-
+data = ["MUTAG","PROTEINS_full","NCI1","NCI109","DD","COLLAB","REDDIT-BINARY","REDDIT-MULTI-5K","IMDB-BINARY","IMDB-MULTI"]
+#file = open("fgsd_res.csv",'a',newline='')
+#res_writer = csv.writer(file, delimiter = ',', quotechar='|', quoting= csv.QUOTE_MINIMAL)
+#header = ["dataset","accuracy","time"]
+#res_writer.writerow(header)
+for d in data:
+    graphs, labels = return_dataset(dataset)
+    print(" {} dataset loaded with {} number of graphs".format(d, len(graphs)))
+    start = time.time()
+    emb,y = FGSD(graphs, labels)
+    end = time.time()
+    print("total time taken: ", end-start)
+    model = RandomForestClassifier(n_estimators = 100)
+    res = cross_val_score(model,emb, y, cv = 10, scoring='accuracy')
+    print("10 fold cross validation accuracy: {}, for dataset ; {}".format(np.mean(res)*100, d))
+    to_write = [d, np.mean(res)*100, end-start]
+    print(to_write)
+    #res_writer.writerow(to_write)
+    #file.flush()
+#file.close()
+    
 
 
 
